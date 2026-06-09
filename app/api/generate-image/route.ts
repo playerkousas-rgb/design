@@ -21,9 +21,10 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(result);
   } catch (e: any) {
-    console.error('Generate image error:', e.message);
+    const message = e?.message || e?.toString?.() || 'Unknown error';
+    console.error('Generate image error:', message, e);
     return NextResponse.json(
-      { error: e.message || 'Image generation failed' },
+      { error: message },
       { status: 500 }
     );
   }

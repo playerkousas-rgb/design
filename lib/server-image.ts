@@ -17,8 +17,18 @@ export interface ImageResult {
 
 async function blobToDataUrl(blob: Blob, mimeType: string = 'image/png'): Promise<string> {
   const arrayBuffer = await blob.arrayBuffer();
-  const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+  const base64 = arrayBufferToBase64(arrayBuffer);
   return `data:${mimeType};base64,${base64}`;
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
 }
 
 async function downloadAndConvert(imageUrl: string): Promise<ImageResult> {
