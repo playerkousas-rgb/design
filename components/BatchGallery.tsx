@@ -2,7 +2,7 @@
 
 import React, { useState, useCallback } from 'react';
 import { Loader2, Sparkles, Check, X } from 'lucide-react';
-import { IMAGE_API_BASE, POLLINATIONS_ANON_INTERVAL_MS, MAX_RETRIES, getRetryDelay } from '@/lib/pollinations';
+import { MAX_RETRIES, getRetryDelay } from '@/lib/pollinations';
 
 interface BatchItem {
   id: number;
@@ -30,39 +30,31 @@ export default function BatchGallery({ prompt, onSelect, onClose }: BatchGallery
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [enhancing, setEnhancing] = useState(false);
 
-  const buildUrl = (seed: number) => {
-    const safePrompt = prompt.replace(/[\x00-\x1F]/g, ' ');
-    const encoded = encodeURIComponent(safePrompt);
-    return `${IMAGE_API_BASE}/${encoded}?width=1024&height=1024&model=flux&nologo=true&enhance=true&seed=${seed}`;
-  };
-
   const generateOne = useCallback(async (item: BatchItem, index: number) => {
     let lastError: any;
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       try {
-        const url = buildUrl(item.seed);
-        const res = await fetch(url);
+        const res = await fetch('/api/generate-image', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt, seed: item.seed }),
+        });
+
         if (!res.ok) {
-        if ((res.status === 429 || res.status === 503) && attempt < MAX_RETRIES - 1) {
-          const delay = getRetryDelay(attempt);
-          console.warn(`Pollinations image batch ${res.status} (attempt ${attempt + 1}/${MAX_RETRIES}), retrying in ${Math.round(delay/1000)}s...`);
-          await new Promise(r => setTimeout(r, delay));
-          continue;
-        }
+          if ((res.status === 429 || res.status === 503) && attempt < MAX_RETRIES - 1) {
+            const delay = getRetryDelay(attempt);
+            console.warn(`Image API batch ${res.status} (attempt ${attempt + 1}/${MAX_RETRIES}), retrying in ${Math.round(delay/1000)}s...`);
+            await new Promise(r => setTimeout(r, delay));
+            continue;
+          }
           throw new Error(`HTTP ${res.status}`);
         }
 
-        const blob = await res.blob();
-        const reader = new FileReader();
-        const dataUrl = await new Promise<string>((resolve, reject) => {
-          reader.onloadend = () => resolve(reader.result as string);
-          reader.onerror = reject;
-          reader.readAsDataURL(blob);
-        });
+        const data = await res.json();
 
         setItems(prev => {
           const next = [...prev];
-          next[index] = { ...next[index], status: 'done', dataUrl };
+          next[index] = { ...next[index], status: 'done', dataUrl: data.url };
           return next;
         });
         return;
@@ -76,13 +68,13 @@ export default function BatchGallery({ prompt, onSelect, onClose }: BatchGallery
   }, [prompt]);
 
   React.useEffect(() => {
-    // 串行生成，間隔 16 秒（Pollinations 匿名 tier 限制 15 秒/次）
+    // 串行生成，間隔 20 秒（避免同時擠壓後端圖片 API）
     let cancelled = false;
     async function run() {
       for (let i = 0; i < 4; i++) {
         if (cancelled) return;
         await generateOne(items[i], i);
-        if (i < 3) await new Promise(r => setTimeout(r, POLLINATIONS_ANON_INTERVAL_MS));
+        if (i < 3) await new Promise(r => setTimeout(r, 20000));
       }
     }
     run();

@@ -11,46 +11,25 @@ import {
 } from 'lucide-react';
 import { t, CATEGORY_CONFIG } from '@/lib/constants';
 import { addHistoryItem, restoreFromHistory, HistoryItem } from '@/lib/history';
-import { IMAGE_API_BASE, MAX_RETRIES, getRetryDelay } from '@/lib/pollinations';
+// 圖片生成已統一由後端 /api/generate-image 處理
 import BatchGallery from './BatchGallery';
 import HistoryPanel from './HistoryPanel';
 
-/** 前端直接從 Pollinations image URL 抓圖（指數退避重試） */
-async function fetchImageAsBase64(url: string, onRetry?: (attempt: number, delayMs: number) => void): Promise<string> {
-  let lastError: any;
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    try {
-      const res = await fetch(url);
-      if (!res.ok) {
-        if ((res.status === 429 || res.status === 503) && attempt < MAX_RETRIES - 1) {
-          const delay = getRetryDelay(attempt);
-          console.warn(`Pollinations image ${res.status} (attempt ${attempt + 1}/${MAX_RETRIES}), retrying in ${Math.round(delay/1000)}s...`);
-          onRetry?.(attempt + 1, delay);
-          await new Promise(r => setTimeout(r, delay));
-          continue;
-        }
-        throw new Error(`Pollinations image ${res.status}`);
-      }
-      const blob = await res.blob();
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-      });
-      return dataUrl;
-    } catch (e) { lastError = e; }
-  }
-  throw lastError;
-}
+/** 後端生成圖片 API */
+async function generateImage(prompt: string, seed?: number): Promise<string> {
+  const res = await fetch('/api/generate-image', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt, seed }),
+  });
 
-/** 組合 Pollinations image URL */
-function buildPollinationsImageUrl(prompt: string, seed?: number): string {
-  const safe = prompt.replace(/[\x00-\x1F]/g, ' ');
-  const encoded = encodeURIComponent(safe);
-  const params = new URLSearchParams({ width: '1024', height: '1024', model: 'flux', nologo: 'true', enhance: 'true' });
-  if (seed != null) params.set('seed', String(seed));
-  return `${IMAGE_API_BASE}/${encoded}?${params.toString()}`;
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '');
+    throw new Error(`Image API ${res.status}: ${txt}`);
+  }
+
+  const data = await res.json();
+  return data.url;
 }
 
 export default function App() {
@@ -242,8 +221,7 @@ export default function App() {
       setDesignExplanation(promptData.explanation || '');
       setStatusMessage('正在生成圖片...');
 
-      const imageUrl = buildPollinationsImageUrl(promptData.finalPrompt || '', promptData.seed);
-      const dataUrl = await fetchImageAsBase64(imageUrl);
+      const dataUrl = await generateImage(promptData.finalPrompt || '', promptData.seed);
       setDesignImage(dataUrl);
       setStatusMessage(null);
       await autoSaveHistory('design', dataUrl, promptData.finalPrompt || '', promptData.explanation || '');
@@ -283,8 +261,7 @@ export default function App() {
       setMockupPrompt(mPrompt);
       setStatusMessage('正在生成成品模擬圖...');
 
-      const imageUrl = buildPollinationsImageUrl(mPrompt, promptData.seed);
-      const dataUrl = await fetchImageAsBase64(imageUrl);
+      const dataUrl = await generateImage(mPrompt, promptData.seed);
       setMockupImage(dataUrl);
       setViewMode('craft');
       setStatusMessage(null);
