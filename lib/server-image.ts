@@ -1,6 +1,6 @@
 /**
  * 後端圖片生成層（Edge Runtime 兼容）
- * 支援 Pollinations / Replicate / Stability AI
+ * 支援 Pollinations / Replicate / Stability AI / Together AI / Hugging Face
  * 讀取 Vercel Environment Variables：IMAGE_PROVIDER + 對應 API Key
  */
 
@@ -40,6 +40,11 @@ export async function generateImage(options: ImageGenerationOptions): Promise<Im
         return await generateImageReplicate(options);
       case 'stability':
         return await generateImageStability(options);
+      case 'together':
+        return await generateImageTogether(options);
+      case 'huggingface':
+      case 'hf':
+        return await generateImageHuggingFace(options);
       default:
         return await generateImagePollinations(options);
     }
@@ -179,4 +184,104 @@ async function generateImageStability(options: ImageGenerationOptions): Promise<
 
   const image = data.artifacts[0];
   return { url: `data:image/png;base64,${image.base64}` };
+}
+
+// ─── Together AI ─────────────────────────────────────
+async function generateImageTogether(options: ImageGenerationOptions): Promise<ImageResult> {
+  const { prompt, width = 1024, height = 1024 } = options;
+  const apiKey = process.env.TOGETHER_API_KEY;
+  if (!apiKey) throw new Error('TOGETHER_API_KEY not set in Vercel Environment Variables');
+
+  const model = process.env.TOGETHER_MODEL || 'black-forest-labs/FLUX.1-schnell';
+
+  const res = await fetch('https://api.together.xyz/v1/images/generations', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      prompt,
+      width,
+      height,
+      n: 1,
+      response_format: 'url',
+    }),
+  });
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '');
+    throw new Error(`Together API ${res.status}: ${txt}`);
+  }
+
+  const data = await res.json();
+  const imageUrl = data.data?.[0]?.url;
+  if (!imageUrl) {
+    throw new Error('Together API returned no image URL');
+  }
+
+  return await downloadAndConvert(imageUrl);
+}
+
+// ─── Hugging Face Inference API ────────────────────────
+async function generateImageHuggingFace(options: ImageGenerationOptions): Promise<ImageResult> {
+  const { prompt, seed } = options;
+  const apiKey = process.env.HF_API_KEY || process.env.HUGGINGFACE_API_KEY;
+  if (!apiKey) throw new Error('HF_API_KEY (or HUGGINGFACE_API_KEY) not set in Vercel Environment Variables');
+
+  const model = process.env.HF_MODEL || 'black-forest-labs/FLUX.1-schnell';
+  const url = `https://api-inference.huggingface.co/models/${model}`;
+
+  const body: any = { inputs: prompt };
+  if (seed != null) body.parameters = { seed };
+
+  const maxAttempts = 5;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (res.status === 503) {
+      const text = await res.text().catch(() => '');
+      let waitSeconds = 10;
+      try {
+        const json = JSON.parse(text);
+        if (json.estimated_time) waitSeconds = Math.min(json.estimated_time, 30);
+      } catch {}
+      await new Promise(resolve => setTimeout(resolve, waitSeconds * 1000));
+      continue;
+    }
+
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      throw new Error(`HuggingFace API ${res.status}: ${txt}`);
+    }
+
+    // Hugging Face returns binary image on success; occasionally JSON on weird errors
+    const buffer = await res.arrayBuffer();
+    const textPreview = new TextDecoder().decode(buffer.slice(0, 200)).trim();
+
+    if (textPreview.startsWith('{')) {
+      try {
+        const json = JSON.parse(new TextDecoder().decode(buffer));
+        if (json.error) {
+          throw new Error(`HuggingFace API error: ${json.error}`);
+        }
+      } catch {}
+      // If it's JSON but not a recognized error, just treat as blob (fallback)
+    }
+
+    const blob = new Blob([buffer]);
+    const dataUrl = await blobToDataUrl(blob, 'image/png');
+    return { url: dataUrl };
+  }
+
+  throw new Error('HuggingFace API timeout after retries');
 }
