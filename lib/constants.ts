@@ -1,4 +1,4 @@
-export const VERSION = 'V4.0.4-20250609';
+export const VERSION = 'V4.0.5-20250609';
 
 export const t = {
   title: `童設計 ${VERSION}`,

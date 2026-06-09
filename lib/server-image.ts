@@ -240,7 +240,7 @@ async function generateImageHuggingFace(options: ImageGenerationOptions): Promis
   const apiKey = process.env.HF_API_KEY || process.env.HUGGINGFACE_API_KEY;
   if (!apiKey) throw new Error('HF_API_KEY (or HUGGINGFACE_API_KEY) not set in Vercel Environment Variables');
 
-  const model = process.env.HF_MODEL || 'black-forest-labs/FLUX.1-schnell';
+  const model = process.env.HF_MODEL || 'stabilityai/stable-diffusion-2-1';
   const url = `https://api-inference.huggingface.co/models/${model}`;
 
   const body: any = { inputs: prompt };
@@ -284,8 +284,15 @@ async function generateImageHuggingFace(options: ImageGenerationOptions): Promis
         if (json.error) {
           throw new Error(`HuggingFace API error: ${json.error}`);
         }
-      } catch {}
-      // If it's JSON but not a recognized error, just treat as blob (fallback)
+        if (json.detail) {
+          throw new Error(`HuggingFace API error: ${JSON.stringify(json.detail)}`);
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message.startsWith('HuggingFace API error')) {
+          throw e;
+        }
+        // Otherwise treat as blob (fallback)
+      }
     }
 
     const blob = new Blob([buffer]);
